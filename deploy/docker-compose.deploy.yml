@@ -1,0 +1,44 @@
+# VM 端正式部署用 compose：不在 VM build，直接用 CI 推到 Artifact Registry 的預建 image。
+# userdata 服務的 IMAGE 由 deploy_on_vm.sh 以環境變數帶入，例如:
+#   IMAGE=asia-east1-docker.pkg.dev/PROJECT/stock-quant-userdata/stock-quant-userdata:<sha>
+#
+# 機密 (JWT_SECRET / POSTGRES_*) 由 VM 上 ${VM_APP_DIR}/.env 提供，不進 git。
+# Postgres 資料放 named volume，跨重新部署保留 (重部署只換 userdata 容器，DB 不動)。
+services:
+  postgres:
+    image: postgres:16
+    container_name: userdata-postgres
+    environment:
+      TZ: Asia/Taipei
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DB: ${POSTGRES_DB:-userdata}
+    volumes:
+      - userdata-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-userdata}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  userdata:
+    image: ${IMAGE}
+    container_name: stock-quant-userdata
+    environment:
+      TZ: Asia/Taipei
+      # 容器內以 service 名 postgres 連線；覆蓋 .env 裡給本機開發用的 localhost DATABASE_URL。
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-userdata}
+    env_file:
+      - .env
+    ports:
+      # 對外 8100；正式環境由前端 nginx 反代 /userapi -> host.docker.internal:8100
+      - "8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # image 的 entrypoint 會先 `alembic upgrade head` 再起 uvicorn
+    restart: unless-stopped
+
+volumes:
+  userdata-pgdata:
