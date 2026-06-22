@@ -2,6 +2,7 @@
 name = "stock-quant-userdata"
 version = "0.1.0"
 description = "Multi-user stock record backend (accounts + per-user stock records)."
+authors = ["Vincent <jummy1124@gmail.com>"]
 readme = "README.md"
 packages = [{ include = "app" }]
 
