@@ -166,4 +166,8 @@ def records_to_xlsx(records: Iterable[Record], owner_label: str = "") -> bytes:
     if records:
         for row in ws.iter_rows(min_row=first, max_row=last):
             for c in (row[4], row[5], row[6]):
-                c.number_format
+                c.number_format = "0.00"
+
+    _autosize(ws, _RECORD_WIDTHS)
+    ws.freeze_panes = "A3"
+    return _workbook_bytes(wb)
