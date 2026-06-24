@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from app.models import Record, User
-from app.schemas import UpsertBody
+from app.models import Record, ScreenSnapshot, ScreenSnapshotItem, User
+from app.schemas import SnapshotIngestBody, UpsertBody
 
 
 # ---------- Users ----------
@@ -95,3 +96,110 @@ def delete_record(
     session.delete(record)
     session.commit()
     return True
+
+
+# ---------- Screening snapshots ----------
+
+
+def upsert_snapshot(
+    session: Session, body: SnapshotIngestBody
+) -> tuple[ScreenSnapshot, bool]:
+    """Create or replace the snapshot for (trade_date, session).
+
+    Idempotent: re-ingesting the same date+session deletes the previous items
+    and rewrites the row, so the screener can safely retry. Returns
+    (snapshot, replaced) where `replaced` is True when an existing snapshot was
+    overwritten.
+    """
+    existing = session.exec(
+        select(ScreenSnapshot).where(
+            ScreenSnapshot.trade_date == body.trade_date,
+            ScreenSnapshot.session == body.session,
+        )
+    ).first()
+    replaced = existing is not None
+
+    if existing is not None:
+        session.execute(
+            delete(ScreenSnapshotItem).where(
+                ScreenSnapshotItem.snapshot_id == existing.id
+            )
+        )
+        snapshot = existing
+    else:
+        snapshot = ScreenSnapshot(
+            trade_date=body.trade_date, session=body.session
+        )
+        session.add(snapshot)
+
+    snapshot.generated_at = body.generated_at
+    snapshot.source = body.source
+    snapshot.universe = body.universe
+    snapshot.quotable = body.quotable
+    snapshot.pool_size = body.pool_size
+    snapshot.warning = body.warning
+    snapshot.item_count = len(body.items)
+
+    for item in body.items:
+        session.add(
+            ScreenSnapshotItem(
+                snapshot_id=snapshot.id,
+                rank=item.rank,
+                symbol=item.symbol,
+                name=item.name,
+                market=item.market,
+                market_code=item.market_code,
+                close=_to_decimal(item.close),
+                prev_close=_to_decimal(item.prev_close),
+                change=_to_decimal(item.change),
+                change_pct=_to_decimal(item.change_pct),
+                volume=item.volume,
+                lots=_to_decimal(item.lots),
+                open=_to_decimal(item.open),
+                high=_to_decimal(item.high),
+                low=_to_decimal(item.low),
+                prev_high=_to_decimal(item.prev_high),
+                vol_ratio=_to_decimal(item.vol_ratio),
+                ma5=_to_decimal(item.ma5),
+                ma20=_to_decimal(item.ma20),
+                ma20_up=item.ma20_up,
+            )
+        )
+
+    session.commit()
+    session.refresh(snapshot)
+    return snapshot, replaced
+
+
+def list_snapshots(
+    session: Session, limit: int = 365
+) -> list[ScreenSnapshot]:
+    """Most-recent-first list of snapshot headers (no items)."""
+    stmt = (
+        select(ScreenSnapshot)
+        .order_by(ScreenSnapshot.trade_date.desc(), ScreenSnapshot.session)
+        .limit(limit)
+    )
+    return list(session.exec(stmt).all())
+
+
+def get_snapshot(
+    session: Session, trade_date: date, session_name: str
+) -> ScreenSnapshot | None:
+    return session.exec(
+        select(ScreenSnapshot).where(
+            ScreenSnapshot.trade_date == trade_date,
+            ScreenSnapshot.session == session_name,
+        )
+    ).first()
+
+
+def get_snapshot_items(
+    session: Session, snapshot_id: uuid.UUID
+) -> list[ScreenSnapshotItem]:
+    stmt = (
+        select(ScreenSnapshotItem)
+        .where(ScreenSnapshotItem.snapshot_id == snapshot_id)
+        .order_by(ScreenSnapshotItem.rank)
+    )
+    return list(session.exec(stmt).all())

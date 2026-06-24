@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import auth, records
+from app.routers import auth, download, ingest, records
 
 app = FastAPI(title="stock_quant_userdata", version="0.1.0")
 
@@ -19,6 +19,8 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(records.router)
+app.include_router(ingest.router)
+app.include_router(download.router)
 
 
 @app.get("/health")

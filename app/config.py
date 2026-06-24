@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ALLOWED_ORIGINS: str = "*"
     APP_PORT: int = 8100
+    # Shared secret the screener (stock_market run_intraday) presents in the
+    # X-Ingest-Token header when POSTing daily screening snapshots. Empty value
+    # disables the ingest endpoint (returns 503) so it can't be hit unconfigured.
+    INGEST_TOKEN: str = ""
 
     @property
     def allowed_origins_list(self) -> list[str]:
