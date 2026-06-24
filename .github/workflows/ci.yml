@@ -35,7 +35,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Poetry
-        run: pipx install poetry==1.8.3
+        run: pipx install poetry==2.4.1
 
       - name: Cache Poetry venv
         uses: actions/cache@v4
