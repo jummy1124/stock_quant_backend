@@ -38,7 +38,7 @@ service so the crawler stays simple and stateless, and all the security-sensitiv
 
 ```mermaid
 flowchart LR
-    subgraph ENG[stock_market<br/>screening engine :8000]
+    subgraph ENG["stock_market · screening engine :8000"]
       SNAP[daily snapshots]
     end
 
@@ -56,7 +56,7 @@ flowchart LR
       DL --- PG
     end
 
-    subgraph FE[stock_quant_frontend<br/>React SPA + nginx]
+    subgraph FE["stock_quant_frontend · React SPA + nginx"]
       UI[Browser UI]
     end
 
@@ -124,88 +124,4 @@ Copy `.env.example` to `.env` and adjust:
 | `APP_PORT` | `8100` | |
 | `POSTGRES_USER/PASSWORD/DB` | `user/pass/userdata` | used by docker compose |
 
-Secrets are read from the environment only and never hard-coded; `.env` is git-ignored.
-
-## API
-
-All paths are prefixed with `/userapi`. Everything except register/login requires
-`Authorization: Bearer <jwt>`. Full interactive docs at `/docs`.
-
-### Auth
-
-| Method | Path | Body | Response |
-|---|---|---|---|
-| POST | `/userapi/auth/register` | `{email, password, display_name?}` | `201 {token, user}` |
-| POST | `/userapi/auth/login` | `{email, password}` | `200 {token, user}` |
-| POST | `/userapi/auth/logout` | — | `204` (stateless; client drops the token) |
-| GET | `/userapi/me` | — | `200 user` |
-
-`user` = `{ id, email, display_name }`. Errors: bad credentials → `401`; duplicate email →
-`409`; validation → `422`.
-
-### Records
-
-| Method | Path | Body | Response |
-|---|---|---|---|
-| GET | `/userapi/records` | — | `200 {records: Record[]}` |
-| PUT | `/userapi/records/{market_code}/{symbol}` | UpsertBody | `200 Record` |
-| DELETE | `/userapi/records/{market_code}/{symbol}` | — | `204` |
-
-```jsonc
-// UpsertBody
-{ "name": "TSMC", "market": "TWSE",
-  "target_price": 120.0, "cost_price": 95.5, "last_close": 109.5 }
-```
-
-- **PUT is an upsert** keyed on `(user_id, market_code, symbol)`.
-- **DELETE is idempotent**; deleting a missing or another user's record returns `204`.
-- Users can only access their own records; anything else is treated as not-found.
-
-### Downloads & snapshot ingest
-
-The service also exposes a `/downloadapi` area for exporting a user's records and the daily
-screening snapshots as `.xlsx`, plus an authenticated ingest endpoint the screening engine
-posts to (guarded by the `X-Ingest-Token` header). See [`DOWNLOAD.md`](DOWNLOAD.md) for the
-full contract.
-
-## Project structure
-
-```
-app/
-  main.py        FastAPI app, CORS, router mounting, /health
-  config.py      Settings (env vars)
-  db.py          engine / session dependency
-  security.py    password hashing, JWT, get_current_user
-  models.py      SQLModel: User, Record (+ snapshots)
-  schemas.py     request/response models (snake_case)
-  crud.py        DB access (always scoped by user_id)
-  download_xlsx.py  openpyxl exporters
-  routers/
-    auth.py      /userapi/auth/*, /userapi/me
-    records.py   /userapi/records*
-    download.py  /downloadapi/*
-    ingest.py    snapshot ingest (X-Ingest-Token)
-alembic/         migrations
-tests/           pytest suite (in-memory SQLite)
-```
-
-## Testing
-
-```bash
-poetry install
-poetry run pytest
-```
-
-Runs against in-memory SQLite (no Postgres required) and covers the auth flow, records
-CRUD, **user isolation**, and auth-error handling.
-
-## Non-goals (by design)
-
-- No price fetching, indicators, or screening — that's `stock_market`.
-- No frontend pages — that's `stock_quant_frontend`.
-- No refresh tokens, third-party OAuth, or email verification in this iteration.
-
----
-
-*Disclaimer: this project is for technical and educational purposes and stores
-user-entered data only. It provides no financial advice.*
+Secrets are read from the environment only 
