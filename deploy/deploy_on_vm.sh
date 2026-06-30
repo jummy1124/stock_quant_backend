@@ -70,6 +70,8 @@ health_check() {
 }
 
 bring_up() {
+  # 確保跨 stack 共用網路存在 (userdata <-> stock-quant ingest 連線用)；已存在則略過
+  ${SUDO} docker network create stock-quant-shared 2>/dev/null || true
   # 重點1：用 sudo env 帶入 IMAGE，避免 sudo 清掉前置環境變數導致 compose 取不到 ${IMAGE}
   # 重點2：若有非 compose 管理的同名 userdata 容器殘留導致 name conflict，移除後重試
   #         (只移除 userdata，不動 postgres，避免誤刪資料庫容器)
