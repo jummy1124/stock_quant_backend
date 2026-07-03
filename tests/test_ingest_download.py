@@ -156,6 +156,57 @@ def test_download_snapshot_bad_session(client):
     assert resp.status_code == 422, resp.text
 
 
+# ---------- snapshot range download (public) ----------
+
+
+def test_download_snapshots_range_xlsx_public(client):
+    _ingest(client, _payload(session="eod", trade_date="2026-06-23", n=1))
+    _ingest(client, _payload(session="eod", trade_date="2026-06-24", n=2))
+    _ingest(client, _payload(session="intraday_1300", trade_date="2026-06-24", n=5))
+    resp = client.get(
+        "/downloadapi/snapshots.xlsx",
+        params={"start": "2026-06-20", "end": "2026-06-25", "session": "eod"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith(
+        "application/vnd.openxmlformats"
+    )
+    assert "attachment" in resp.headers["content-disposition"]
+    wb = load_workbook(io.BytesIO(resp.content))
+    ws = wb.active
+    # title + header + 1 (0623) + 2 (0624) = 3 data rows -> max_row 5
+    assert ws.max_row == 5
+    assert ws.cell(row=3, column=1).value == "2026-06-23"
+    assert ws.cell(row=4, column=1).value == "2026-06-24"
+    assert ws.cell(row=5, column=1).value == "2026-06-24"
+
+
+def test_download_snapshots_range_empty_returns_labelled_workbook(client):
+    resp = client.get(
+        "/downloadapi/snapshots.xlsx",
+        params={"start": "2020-01-01", "end": "2020-01-31", "session": "eod"},
+    )
+    assert resp.status_code == 200, resp.text
+    wb = load_workbook(io.BytesIO(resp.content))
+    assert "無符合" in (wb.active.cell(row=1, column=1).value or "")
+
+
+def test_download_snapshots_range_bad_session(client):
+    resp = client.get(
+        "/downloadapi/snapshots.xlsx",
+        params={"start": "2026-06-20", "end": "2026-06-25", "session": "bogus"},
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_download_snapshots_range_start_after_end(client):
+    resp = client.get(
+        "/downloadapi/snapshots.xlsx",
+        params={"start": "2026-06-25", "end": "2026-06-20", "session": "eod"},
+    )
+    assert resp.status_code == 422, resp.text
+
+
 # ---------- records download (requires JWT) ----------
 
 

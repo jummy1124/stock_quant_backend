@@ -183,6 +183,22 @@ def list_snapshots(
     return list(session.exec(stmt).all())
 
 
+def list_snapshots_in_range(
+    session: Session, start: date, end: date, session_name: str
+) -> list[ScreenSnapshot]:
+    """Snapshot headers for one session within [start, end], oldest first (no items)."""
+    stmt = (
+        select(ScreenSnapshot)
+        .where(
+            ScreenSnapshot.trade_date >= start,
+            ScreenSnapshot.trade_date <= end,
+            ScreenSnapshot.session == session_name,
+        )
+        .order_by(ScreenSnapshot.trade_date)
+    )
+    return list(session.exec(stmt).all())
+
+
 def get_snapshot(
     session: Session, trade_date: date, session_name: str
 ) -> ScreenSnapshot | None:

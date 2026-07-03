@@ -21,8 +21,10 @@ from app import crud
 from app.db import get_session
 from app.download_xlsx import (
     empty_snapshot_xlsx,
+    empty_snapshots_range_xlsx,
     records_to_xlsx,
     snapshot_to_xlsx,
+    snapshots_range_to_xlsx,
 )
 from app.models import SESSIONS, User
 from app.schemas import SnapshotListResponse, SnapshotMeta
@@ -31,6 +33,7 @@ from app.security import get_current_user
 router = APIRouter(prefix="/downloadapi", tags=["download"])
 
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_MAX_RANGE_DAYS = 366  # guard against pathological queries; ~1 year of calendar days
 
 
 def _xlsx_response(data: bytes, filename: str) -> Response:
@@ -95,6 +98,47 @@ def download_snapshot(
         return _xlsx_response(data, filename)
     items = crud.get_snapshot_items(session, snap.id)
     data = snapshot_to_xlsx(snap, items)
+    return _xlsx_response(data, filename)
+
+
+@router.get("/snapshots.xlsx")
+def download_snapshots_range(
+    start: date_cls = Query(..., description="起始交易日 YYYY-MM-DD"),
+    end: date_cls = Query(..., description="結束交易日 YYYY-MM-DD"),
+    session_name: str = Query(
+        ..., alias="session", description="intraday_1300 | eod"
+    ),
+    session: Session = Depends(get_session),
+):
+    """Public: download every screening snapshot in [start, end] for one session,
+    packed into a single .xlsx (one row per stock, with a leading 交易日 column).
+    """
+    if session_name not in SESSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"session must be one of {SESSIONS}.",
+        )
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="start must not be after end.",
+        )
+    if (end - start).days > _MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"range too large (max {_MAX_RANGE_DAYS} days).",
+        )
+
+    start_label, end_label = f"{start:%Y-%m-%d}", f"{end:%Y-%m-%d}"
+    filename = f"screen_{start:%Y%m%d}_{end:%Y%m%d}_{session_name}.xlsx"
+
+    snaps = crud.list_snapshots_in_range(session, start, end, session_name)
+    if not snaps:
+        data = empty_snapshots_range_xlsx(start_label, end_label, session_name)
+        return _xlsx_response(data, filename)
+
+    rows = [(s, crud.get_snapshot_items(session, s.id)) for s in snaps]
+    data = snapshots_range_to_xlsx(rows, start_label, end_label, session_name)
     return _xlsx_response(data, filename)
 
 

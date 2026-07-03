@@ -123,6 +123,88 @@ def empty_snapshot_xlsx(trade_date_label: str, session: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Screening snapshots (date range) -> single xlsx
+# ---------------------------------------------------------------------------
+
+_RANGE_HEADERS = ["交易日", *_SNAPSHOT_HEADERS]
+_RANGE_WIDTHS = [12, *_SNAPSHOT_WIDTHS]
+
+
+def snapshots_range_to_xlsx(
+    rows: Iterable[tuple[ScreenSnapshot, Sequence[ScreenSnapshotItem]]],
+    start_label: str,
+    end_label: str,
+    session: str,
+) -> bytes:
+    """Pack every snapshot's items in [start, end] for one session into one sheet,
+    oldest trade_date first, with a leading 交易日 column so it can be sorted/
+    filtered like a normal table.
+    """
+    rows = list(rows)
+    total_items = sum(len(items) for _snap, items in rows)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "起漲篩選"
+
+    label = _SESSION_LABEL.get(session, session)
+    title = (
+        f"{start_label} ~ {end_label} {label} 起漲篩選　"
+        f"共 {len(rows)} 個交易日、{total_items} 檔"
+    )
+    ws.append([title])
+    ws.cell(row=1, column=1).font = Font(bold=True, size=12)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_RANGE_HEADERS))
+
+    ws.append(_RANGE_HEADERS)
+    _style_header(ws, 2, len(_RANGE_HEADERS))
+
+    for snap, items in rows:
+        date_label = f"{snap.trade_date:%Y-%m-%d}"
+        for it in items:
+            ws.append([
+                date_label,
+                it.rank,
+                it.symbol,
+                it.name,
+                it.market,
+                _num(it.close),
+                _num(it.change),
+                _num(it.change_pct),
+                _num(it.lots),
+                _num(it.prev_high),
+                _num(it.vol_ratio),
+                _num(it.ma5),
+                _num(it.ma20),
+                "↑" if it.ma20_up else "",
+                _num(it.prev_close),
+            ])
+
+    first = 3
+    last = first + total_items - 1
+    if total_items:
+        for row in ws.iter_rows(min_row=first, max_row=last):
+            for c in (row[5], row[6], row[7], row[9], row[10], row[11], row[12], row[14]):
+                c.number_format = "0.00"
+            row[13].alignment = Alignment(horizontal="center")
+
+    _autosize(ws, _RANGE_WIDTHS)
+    ws.freeze_panes = "A3"
+    return _workbook_bytes(wb)
+
+
+def empty_snapshots_range_xlsx(start_label: str, end_label: str, session: str) -> bytes:
+    """A valid, clearly-labelled workbook for a date range with no results at all."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "起漲篩選"
+    label = _SESSION_LABEL.get(session, session)
+    ws.append([f"{start_label} ~ {end_label} {label} 起漲篩選：此範圍內無符合條件的資料"])
+    ws.cell(row=1, column=1).font = Font(bold=True, size=12)
+    return _workbook_bytes(wb)
+
+
+# ---------------------------------------------------------------------------
 # User records -> xlsx
 # ---------------------------------------------------------------------------
 
