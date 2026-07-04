@@ -27,7 +27,7 @@ from app.download_xlsx import (
     snapshots_range_to_xlsx,
 )
 from app.models import SESSIONS, User
-from app.schemas import SnapshotListResponse, SnapshotMeta
+from app.schemas import SnapshotCoverage, SnapshotListResponse, SnapshotMeta
 from app.security import get_current_user
 
 router = APIRouter(prefix="/downloadapi", tags=["download"])
@@ -50,13 +50,65 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/coverage", response_model=SnapshotCoverage)
+def snapshot_coverage(session: Session = Depends(get_session)):
+    """Public: whole-database stats (earliest/latest trade_date, trading days,
+    total snapshot rows) via a cheap SQL aggregate — accurate no matter how
+    much history has accumulated (unlike scanning a capped listing client-side).
+    """
+    min_date, max_date, trading_days, total = crud.get_snapshot_coverage(session)
+    return SnapshotCoverage(
+        min_date=min_date,
+        max_date=max_date,
+        trading_days=trading_days,
+        total_snapshots=total,
+    )
+
+
 @router.get("/snapshots", response_model=SnapshotListResponse)
 def list_snapshots(
     limit: int = Query(365, ge=1, le=2000),
+    start: date_cls | None = Query(
+        None, description="起始交易日 YYYY-MM-DD（需與 end 一起帶）"
+    ),
+    end: date_cls | None = Query(
+        None, description="結束交易日 YYYY-MM-DD（需與 start 一起帶）"
+    ),
+    session_name: str | None = Query(
+        None, alias="session", description="intraday_1300 | eod（可選，篩選單一時段）"
+    ),
     session: Session = Depends(get_session),
 ):
-    """Public: available screening snapshots (newest first), headers only."""
-    rows = crud.list_snapshots(session, limit=limit)
+    """Public: available screening snapshots, headers only.
+
+    Two modes:
+      - no start/end -> most-recent-`limit` snapshots (newest first), for a
+        quick overview.
+      - start & end given -> every snapshot in that closed range (oldest
+        first), queried straight from the database — this is what the
+        download page's date-range picker uses, so results always reflect
+        what's actually persisted, not a client-side cache.
+    """
+    if start is not None or end is not None:
+        if start is None or end is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="start and end must be provided together.",
+            )
+        if start > end:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="start must not be after end.",
+            )
+        if session_name is not None and session_name not in SESSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"session must be one of {SESSIONS}.",
+            )
+        rows = crud.list_snapshots_in_range(session, start, end, session_name)
+    else:
+        rows = crud.list_snapshots(session, limit=limit)
+
     return SnapshotListResponse(
         snapshots=[
             SnapshotMeta(

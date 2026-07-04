@@ -207,6 +207,80 @@ def test_download_snapshots_range_start_after_end(client):
     assert resp.status_code == 422, resp.text
 
 
+# ---------- coverage (public, SQL aggregate) ----------
+
+
+def test_coverage_empty_db(client):
+    resp = client.get("/downloadapi/coverage")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {
+        "min_date": None,
+        "max_date": None,
+        "trading_days": 0,
+        "total_snapshots": 0,
+    }
+
+
+def test_coverage_reflects_ingested_data(client):
+    _ingest(client, _payload(session="eod", trade_date="2026-06-20", n=1))
+    _ingest(client, _payload(session="eod", trade_date="2026-06-24", n=2))
+    _ingest(client, _payload(session="intraday_1300", trade_date="2026-06-24", n=5))
+    resp = client.get("/downloadapi/coverage")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["min_date"] == "2026-06-20"
+    assert body["max_date"] == "2026-06-24"
+    assert body["trading_days"] == 2  # distinct trade_date
+    assert body["total_snapshots"] == 3  # 3 snapshot rows (date, session) pairs
+
+
+# ---------- /downloadapi/snapshots range filter (server-side, not client cache) ----------
+
+
+def test_list_snapshots_range_filters_by_start_end_session(client):
+    _ingest(client, _payload(session="eod", trade_date="2026-06-20", n=1))
+    _ingest(client, _payload(session="eod", trade_date="2026-06-24", n=2))
+    _ingest(client, _payload(session="intraday_1300", trade_date="2026-06-24", n=5))
+
+    resp = client.get(
+        "/downloadapi/snapshots",
+        params={"start": "2026-06-22", "end": "2026-06-25", "session": "eod"},
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["snapshots"]
+    assert len(rows) == 1
+    assert rows[0]["trade_date"] == "2026-06-24"
+    assert rows[0]["session"] == "eod"
+    assert rows[0]["item_count"] == 2
+
+
+def test_list_snapshots_range_without_session_returns_both(client):
+    _ingest(client, _payload(session="eod", trade_date="2026-06-24", n=2))
+    _ingest(client, _payload(session="intraday_1300", trade_date="2026-06-24", n=5))
+
+    resp = client.get(
+        "/downloadapi/snapshots",
+        params={"start": "2026-06-24", "end": "2026-06-24"},
+    )
+    assert resp.status_code == 200, resp.text
+    sessions = {row["session"] for row in resp.json()["snapshots"]}
+    assert sessions == {"eod", "intraday_1300"}
+
+
+def test_list_snapshots_range_requires_both_bounds(client):
+    resp = client.get("/downloadapi/snapshots", params={"start": "2026-06-20"})
+    assert resp.status_code == 422, resp.text
+
+
+def test_list_snapshots_range_start_after_end(client):
+    resp = client.get(
+        "/downloadapi/snapshots",
+        params={"start": "2026-06-25", "end": "2026-06-20"},
+    )
+    assert resp.status_code == 422, resp.text
+
+
 # ---------- records download (requires JWT) ----------
 
 

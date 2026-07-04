@@ -119,3 +119,14 @@ class SnapshotMeta(BaseModel):
 
 class SnapshotListResponse(BaseModel):
     snapshots: list[SnapshotMeta]
+
+
+class SnapshotCoverage(BaseModel):
+    """Whole-table stats, used by the download page to show how much history
+    actually exists in the database (independent of any single query's range).
+    """
+
+    min_date: date | None = None
+    max_date: date | None = None
+    trading_days: int = 0
+    total_snapshots: int = 0

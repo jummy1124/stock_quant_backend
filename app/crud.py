@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from sqlmodel import Session, select
 
 from app.models import Record, ScreenSnapshot, ScreenSnapshotItem, User
@@ -184,19 +184,41 @@ def list_snapshots(
 
 
 def list_snapshots_in_range(
-    session: Session, start: date, end: date, session_name: str
+    session: Session, start: date, end: date, session_name: str | None = None
 ) -> list[ScreenSnapshot]:
-    """Snapshot headers for one session within [start, end], oldest first (no items)."""
-    stmt = (
-        select(ScreenSnapshot)
-        .where(
-            ScreenSnapshot.trade_date >= start,
-            ScreenSnapshot.trade_date <= end,
-            ScreenSnapshot.session == session_name,
-        )
-        .order_by(ScreenSnapshot.trade_date)
+    """Snapshot headers within [start, end], oldest first (no items).
+
+    session_name is optional: pass one of SESSIONS to filter to a single
+    session, or omit it to get both sessions in the range.
+    """
+    stmt = select(ScreenSnapshot).where(
+        ScreenSnapshot.trade_date >= start,
+        ScreenSnapshot.trade_date <= end,
     )
+    if session_name is not None:
+        stmt = stmt.where(ScreenSnapshot.session == session_name)
+    stmt = stmt.order_by(ScreenSnapshot.trade_date, ScreenSnapshot.session)
     return list(session.exec(stmt).all())
+
+
+def get_snapshot_coverage(
+    session: Session,
+) -> tuple[date | None, date | None, int, int]:
+    """(earliest trade_date, latest trade_date, distinct trading days, total
+    snapshot rows) across the whole table — a cheap SQL aggregate, accurate
+    regardless of how many rows exist (no in-memory cap needed).
+    """
+    total = session.exec(
+        select(func.count()).select_from(ScreenSnapshot)
+    ).one()
+    if not total:
+        return None, None, 0, 0
+    min_date = session.exec(select(func.min(ScreenSnapshot.trade_date))).one()
+    max_date = session.exec(select(func.max(ScreenSnapshot.trade_date))).one()
+    trading_days = session.exec(
+        select(func.count(func.distinct(ScreenSnapshot.trade_date)))
+    ).one()
+    return min_date, max_date, trading_days, total
 
 
 def get_snapshot(
