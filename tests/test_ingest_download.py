@@ -219,6 +219,7 @@ def test_coverage_empty_db(client):
         "max_date": None,
         "trading_days": 0,
         "total_snapshots": 0,
+        "db_size_bytes": None,  # SQLite test DB doesn't support this
     }
 
 
@@ -233,6 +234,7 @@ def test_coverage_reflects_ingested_data(client):
     assert body["max_date"] == "2026-06-24"
     assert body["trading_days"] == 2  # distinct trade_date
     assert body["total_snapshots"] == 3  # 3 snapshot rows (date, session) pairs
+    assert body["db_size_bytes"] is None  # not available on the SQLite test DB
 
 
 # ---------- /downloadapi/snapshots range filter (server-side, not client cache) ----------

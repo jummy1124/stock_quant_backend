@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, text
 from sqlmodel import Session, select
 
 from app.models import Record, ScreenSnapshot, ScreenSnapshotItem, User
@@ -219,6 +219,26 @@ def get_snapshot_coverage(
         select(func.count(func.distinct(ScreenSnapshot.trade_date)))
     ).one()
     return min_date, max_date, trading_days, total
+
+
+def get_snapshot_db_size(session: Session) -> int | None:
+    """Total on-disk size (bytes) of the screening-snapshot tables — data,
+    indexes, and TOAST — via Postgres's pg_total_relation_size().
+
+    Returns None on non-Postgres engines (e.g. the SQLite test database),
+    where this figure isn't meaningful/available; callers should treat that
+    as "unknown", not zero.
+    """
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    result = session.execute(
+        text(
+            "SELECT pg_total_relation_size('screen_snapshots') "
+            "+ pg_total_relation_size('screen_snapshot_items')"
+        )
+    ).scalar()
+    return int(result) if result is not None else None
 
 
 def get_snapshot(

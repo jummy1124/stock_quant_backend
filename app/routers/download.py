@@ -62,6 +62,7 @@ def snapshot_coverage(session: Session = Depends(get_session)):
         max_date=max_date,
         trading_days=trading_days,
         total_snapshots=total,
+        db_size_bytes=crud.get_snapshot_db_size(session),
     )
 
 

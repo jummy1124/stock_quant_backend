@@ -130,3 +130,11 @@ class SnapshotCoverage(BaseModel):
     max_date: date | None = None
     trading_days: int = 0
     total_snapshots: int = 0
+    db_size_bytes: int | None = Field(
+        default=None,
+        description=(
+            "Total on-disk size (bytes) of the screening-snapshot tables "
+            "(data + indexes + TOAST). None when the backing database doesn't "
+            "support this (e.g. SQLite in tests)."
+        ),
+    )
