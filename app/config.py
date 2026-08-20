@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     # --- Rate limiting ---
     RATE_LIMIT_ENABLED: bool = True
 
+    # --- Logging ---
+    # Level for this application's own loggers (the `app.*` namespace).
+    # See app.main._configure_logging for why this needs setting up explicitly.
+    LOG_LEVEL: str = "INFO"
+
     @field_validator("JWT_SECRET")
     @classmethod
     def _check_jwt_secret(cls, v: str) -> str:

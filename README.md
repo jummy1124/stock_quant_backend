@@ -139,6 +139,7 @@ Copy `.env.example` to `.env` and adjust:
 | `EMAIL_VERIFY_TTL_MINUTES` | `1440` | verification link lifetime |
 | `PASSWORD_RESET_TTL_MINUTES` | `30` | reset link lifetime |
 | `RATE_LIMIT_ENABLED` | `true` | in-process limiter; see `app/ratelimit.py` before scaling out |
+| `LOG_LEVEL` | `INFO` | level for this app's own (`app.*`) loggers |
 | `POSTGRES_USER/PASSWORD/DB` | `user/pass/userdata` | used by docker compose |
 
 Secrets are read from the environment only and never hard-coded; `.env` is git-ignored.
@@ -161,6 +162,13 @@ docker compose logs -f app     # or watch the uvicorn output
 For real delivery with Gmail, set `EMAIL_BACKEND=smtp`, `SMTP_HOST=smtp.gmail.com`,
 `SMTP_PORT=587`, and use an [App Password](https://myaccount.google.com/apppasswords)
 as `SMTP_PASSWORD`.
+
+> **Deploying?** `EMAIL_BACKEND` defaults to `console`, so a deployment that never
+> sets it will accept "forgot password" requests, tell the user to check their
+> inbox, and deliver nothing. The same goes for `APP_BASE_URL`: left at its
+> default, mail goes out containing links to `localhost`. The app logs a WARNING
+> at startup for both, and the console backend itself logs at WARNING (not INFO)
+> so the undelivered message is visible wherever logs are actually collected.
 
 ## API
 

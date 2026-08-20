@@ -45,14 +45,20 @@ class ConsoleEmailSender:
 
     Deliberately prints the full body: during development the whole point is to
     be able to copy the verification / reset link out of the terminal.
+
+    Logged at WARNING, not INFO. "We generated a password-reset link and did not
+    actually deliver it to anyone" is a noteworthy state of the system, not
+    routine chatter — and if this backend is ever active in production by
+    accident (it is the default, so that is an easy mistake), the log line needs
+    to survive whatever level the deployment is filtering at.
     """
 
     def send(
         self, to: str, subject: str, text_body: str, html_body: str | None = None
     ) -> None:
-        logger.info(
+        logger.warning(
             "\n"
-            "======================= EMAIL (console backend) =======================\n"
+            "=========== EMAIL *NOT SENT* — console backend, no SMTP ===============\n"
             "To:      %s\n"
             "From:    %s <%s>\n"
             "Subject: %s\n"
