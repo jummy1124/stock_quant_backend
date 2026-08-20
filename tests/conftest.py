@@ -1,13 +1,26 @@
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+import os
 
-from app.db import get_session
-from app.main import app
+# JWT_SECRET has no default (app.config fails fast without it), so the test
+# environment must supply one BEFORE app.config is imported below. setdefault,
+# not assignment, so a developer with a real .env / exported value keeps it.
+os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production-0123456789")
+# Never open an SMTP connection from the suite, whatever the developer's .env
+# says. app.email's console backend just logs.
+os.environ["EMAIL_BACKEND"] = "console"
+# Rate limits are per-process and would leak across tests; the dedicated
+# rate-limit tests turn this back on for themselves.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
+
+from app.db import get_session  # noqa: E402
+from app.main import app  # noqa: E402
 
 # Import models so their tables register on SQLModel.metadata.
-from app import models  # noqa: F401
+from app import models  # noqa: F401,E402
 
 
 @pytest.fixture(name="engine")
@@ -33,6 +46,37 @@ def client_fixture(engine):
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(name="outbox")
+def outbox_fixture():
+    """Capture outgoing mail instead of logging it.
+
+    Yields a list of (to, subject, text_body, html_body) tuples, so a test can
+    pull the verification / reset link straight out of the message the endpoint
+    would have sent.
+    """
+    from app import email as email_mod
+
+    sent: list[tuple[str, str, str, str | None]] = []
+
+    class _Capture:
+        def send(self, to, subject, text_body, html_body=None):
+            sent.append((to, subject, text_body, html_body))
+
+    email_mod.set_email_sender(_Capture())
+    yield sent
+    email_mod.set_email_sender(None)
+
+
+def token_from_email(text_body: str, param: str) -> str:
+    """Extract the raw token from a link like `http://host/?verify=<token>`."""
+    marker = f"?{param}="
+    start = text_body.index(marker) + len(marker)
+    end = start
+    while end < len(text_body) and not text_body[end].isspace():
+        end += 1
+    return text_body[start:end]
 
 
 def register(client, email="a@example.com", password="secret123", display_name=None):

@@ -38,10 +38,10 @@ def test_register_invalid_email_returns_422(client):
 
 
 def test_login_success(client):
-    register(client, email="login@example.com", password="pw12345")
+    register(client, email="login@example.com", password="pw123456")
     resp = client.post(
         "/userapi/auth/login",
-        json={"email": "login@example.com", "password": "pw12345"},
+        json={"email": "login@example.com", "password": "pw123456"},
     )
     assert resp.status_code == 200
     assert "token" in resp.json()

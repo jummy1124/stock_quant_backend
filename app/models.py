@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Numeric,
+    String,
     UniqueConstraint,
     Uuid,
     func,
@@ -21,6 +22,11 @@ from sqlmodel import Field, SQLModel
 SESSION_INTRADAY_1300 = "intraday_1300"  # 盤中 13:00 篩選快照
 SESSION_EOD = "eod"  # 收盤後篩選快照
 SESSIONS = (SESSION_INTRADAY_1300, SESSION_EOD)
+
+# Purposes for the single-use tokens mailed to a user's address.
+PURPOSE_VERIFY_EMAIL = "verify_email"
+PURPOSE_PASSWORD_RESET = "password_reset"
+TOKEN_PURPOSES = (PURPOSE_VERIFY_EMAIL, PURPOSE_PASSWORD_RESET)
 
 
 def _utcnow() -> datetime:
@@ -43,6 +49,85 @@ class User(SQLModel, table=True):
     email: str = Field(index=True, unique=True, nullable=False)
     password_hash: str = Field(nullable=False)
     display_name: str | None = Field(default=None, nullable=True)
+    # NULL = address not verified yet. Verification is advisory (soft) in this
+    # iteration: an unverified user can still sign in and use the app, the UI
+    # just shows a banner. Keeping the timestamp (rather than a bool) makes the
+    # audit question "when did they confirm?" answerable later.
+    email_verified_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    # Audit only: when the password last changed. Enforcement is token_version.
+    password_changed_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    # Incremented on every password change and embedded in each JWT as `ver`.
+    # get_current_user rejects any token whose `ver` doesn't match, which is how
+    # "reset my password" ends other sessions without needing a token blacklist.
+    #
+    # A version counter rather than a timestamp comparison on purpose: JWT `iat`
+    # has one-second granularity, so comparing it against a change timestamp
+    # leaves a sub-second window in which a token minted just before the reset
+    # still validates — precisely the token an attacker would be holding. An
+    # integer either matches or it doesn't.
+    token_version: int = Field(
+        default=0,
+        sa_column=Column(Integer(), nullable=False, server_default="0"),
+    )
+    created_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+
+    @property
+    def email_verified(self) -> bool:
+        return self.email_verified_at is not None
+
+
+class EmailToken(SQLModel, table=True):
+    """A single-use, time-limited token mailed to a user's address.
+
+    Only the SHA-256 of the token is stored. The raw value exists exactly once,
+    inside the email — so a database dump does not let an attacker verify
+    addresses or reset passwords. SHA-256 (not bcrypt) is the right choice here
+    because the token is 256 bits of `secrets` entropy: there is nothing to
+    brute-force, and lookups must stay cheap.
+    """
+
+    __tablename__ = "email_tokens"
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        sa_column=Column(Uuid(), primary_key=True),
+    )
+    user_id: uuid.UUID = Field(
+        sa_column=Column(
+            Uuid(),
+            ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+    )
+    purpose: str = Field(nullable=False)  # one of models.TOKEN_PURPOSES
+    # Unique so a (theoretically impossible) collision surfaces as an error
+    # rather than silently letting one token address two accounts.
+    token_hash: str = Field(
+        sa_column=Column(String(64), nullable=False, unique=True, index=True)
+    )
+    expires_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    used_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=_utcnow,
         sa_column=Column(

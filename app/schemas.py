@@ -6,26 +6,64 @@ from pydantic import BaseModel, EmailStr, Field
 # ---------- Auth ----------
 
 
+# bcrypt hashes at most 72 bytes and silently ignores the rest, so a longer
+# password is not the extra security it looks like — cap it explicitly instead
+# of letting the truncation happen invisibly.
+PASSWORD_MIN_LEN = 8
+PASSWORD_MAX_LEN = 72
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1)
+    password: str = Field(min_length=PASSWORD_MIN_LEN, max_length=PASSWORD_MAX_LEN)
     display_name: str | None = None
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1)
+    # Deliberately NOT PASSWORD_MIN_LEN: accounts created before the policy
+    # existed still have short passwords, and locking them out of sign-in (as
+    # opposed to nudging them at the next change) would be a regression. The
+    # max is kept so an oversized body is rejected before it reaches bcrypt.
+    password: str = Field(min_length=1, max_length=PASSWORD_MAX_LEN)
 
 
 class UserOut(BaseModel):
     id: str
     email: str
     display_name: str | None = None
+    email_verified: bool = False
 
 
 class AuthResponse(BaseModel):
     token: str
     user: UserOut
+
+
+# ---------- Email verification / password reset ----------
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1)
+    password: str = Field(min_length=PASSWORD_MIN_LEN, max_length=PASSWORD_MAX_LEN)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1)
+
+
+class MessageResponse(BaseModel):
+    """Deliberately vague, uniform acknowledgement.
+
+    Endpoints that act on an email address return this same shape whether or not
+    the address exists, so the response can't be used to enumerate accounts.
+    """
+
+    message: str
 
 
 # ---------- Records ----------

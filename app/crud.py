@@ -1,26 +1,55 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import delete, func, text
 from sqlmodel import Session, select
 
-from app.models import Record, ScreenSnapshot, ScreenSnapshotItem, User
+from app.models import (
+    EmailToken,
+    Record,
+    ScreenSnapshot,
+    ScreenSnapshotItem,
+    User,
+)
 from app.schemas import SnapshotIngestBody, UpsertBody
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """SQLite drops tzinfo on round-trip; re-attach UTC before comparing."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 # ---------- Users ----------
 
 
+def normalize_email(email: str) -> str:
+    """Case-insensitive, whitespace-trimmed form used for storage and lookup.
+
+    Without this, `A@x.com` and `a@x.com` are two accounts, and "forgot
+    password" silently fails for anyone who capitalised their address on a
+    phone keyboard.
+    """
+    return email.strip().lower()
+
+
 def get_user_by_email(session: Session, email: str) -> User | None:
-    return session.exec(select(User).where(User.email == email)).first()
+    return session.exec(
+        select(User).where(User.email == normalize_email(email))
+    ).first()
 
 
 def create_user(
     session: Session, email: str, password_hash: str, display_name: str | None
 ) -> User:
     user = User(
-        email=email,
+        email=normalize_email(email),
         password_hash=password_hash,
         display_name=display_name,
     )
@@ -28,6 +57,108 @@ def create_user(
     session.commit()
     session.refresh(user)
     return user
+
+
+def mark_email_verified(session: Session, user: User) -> User:
+    if user.email_verified_at is None:
+        user.email_verified_at = _utcnow()
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    return user
+
+
+def set_password(session: Session, user: User, password_hash: str) -> User:
+    """Change the password and invalidate every token issued before now.
+
+    Bumping ``token_version`` is what logs out any session still holding an
+    older token — including the attacker's, which is the whole point of
+    resetting a password you think was compromised. ``password_changed_at`` is
+    recorded alongside it purely for the audit trail.
+    """
+    user.password_hash = password_hash
+    user.password_changed_at = _utcnow()
+    user.token_version = (user.token_version or 0) + 1
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+# ---------- Email tokens (verification / password reset) ----------
+
+
+def create_email_token(
+    session: Session, user_id: uuid.UUID, purpose: str, token_hash: str, ttl_minutes: int
+) -> EmailToken:
+    token = EmailToken(
+        user_id=user_id,
+        purpose=purpose,
+        token_hash=token_hash,
+        expires_at=_utcnow() + timedelta(minutes=ttl_minutes),
+    )
+    session.add(token)
+    session.commit()
+    session.refresh(token)
+    return token
+
+
+def get_usable_email_token(
+    session: Session, purpose: str, token_hash: str
+) -> EmailToken | None:
+    """Look up a token that is for this purpose, unused, and not expired.
+
+    ``purpose`` is part of the query on purpose: a verification token must never
+    be accepted by the password-reset endpoint, even though both live in the
+    same table.
+    """
+    token = session.exec(
+        select(EmailToken).where(
+            EmailToken.token_hash == token_hash,
+            EmailToken.purpose == purpose,
+        )
+    ).first()
+    if token is None or token.used_at is not None:
+        return None
+    expires_at = _as_utc(token.expires_at)
+    if expires_at is None or expires_at <= _utcnow():
+        return None
+    return token
+
+
+def consume_email_token(session: Session, token: EmailToken) -> EmailToken:
+    token.used_at = _utcnow()
+    session.add(token)
+    session.commit()
+    session.refresh(token)
+    return token
+
+
+def invalidate_email_tokens(
+    session: Session, user_id: uuid.UUID, purpose: str
+) -> int:
+    """Mark every outstanding token of this purpose as used.
+
+    Called before issuing a new one, so a mailbox never holds two live reset
+    links, and called after a successful reset, so an older link in the same
+    mailbox is dead on arrival.
+    """
+    rows = list(
+        session.exec(
+            select(EmailToken).where(
+                EmailToken.user_id == user_id,
+                EmailToken.purpose == purpose,
+                EmailToken.used_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+    )
+    now = _utcnow()
+    for row in rows:
+        row.used_at = now
+        session.add(row)
+    if rows:
+        session.commit()
+    return len(rows)
 
 
 # ---------- Records (always scoped by user_id) ----------
