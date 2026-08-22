@@ -32,9 +32,17 @@ def _configure_logging() -> None:
         )
         app_logger.addHandler(handler)
     app_logger.setLevel(level)
-    # Don't also hand these to the root logger; that would double-print them
-    # anywhere root *is* configured.
-    app_logger.propagate = False
+    # Propagation stays ON. It is tempting to switch it off to avoid a second
+    # copy wherever root is configured, but nothing here needs that: logging
+    # only falls back to `lastResort` when *no* handler is found anywhere in the
+    # chain, and the handler attached above always counts — so an unconfigured
+    # root (uvicorn's situation) prints exactly once either way.
+    #
+    # Turning it off actively breaks things: pytest's caplog fixture captures
+    # through a handler on the root logger, so `propagate = False` silently
+    # blinds every test that asserts on log output. It also cuts off any log
+    # aggregation a future deployment wires up at root.
+    app_logger.propagate = True
 
 
 def _warn_about_dev_defaults() -> None:
