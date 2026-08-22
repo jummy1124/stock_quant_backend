@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import auth, download, ingest, records
+from app.routers import auth, backtest, download, ingest, records
 
 
 def _configure_logging() -> None:
@@ -97,6 +97,7 @@ app.include_router(auth.router)
 app.include_router(records.router)
 app.include_router(ingest.router)
 app.include_router(download.router)
+app.include_router(backtest.router)
 
 
 @app.get("/health")

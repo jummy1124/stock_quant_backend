@@ -288,3 +288,59 @@ class ScreenSnapshotItem(SQLModel, table=True):
     ma20_up: bool = Field(
         default=False, sa_column=Column(Boolean(), nullable=False)
     )
+
+
+# ---------------------------------------------------------------------------
+# Whole-market daily closes (system-wide reference data).
+#
+# The screening snapshots above only ever contain the handful of stocks that
+# passed the 起漲 filter on a given day. Backtesting needs the opposite: the
+# price of *those* stocks on days when they were NOT selected — i.e. an ordinary
+# daily bar for the whole market. That is what this table is.
+#
+# It is filled by the screener after close (it already holds the full-market
+# history in memory, so uploading it costs no extra fetching) and by the
+# backfill CLI. One row per (trade_date, symbol); re-uploading a day overwrites
+# it, so retries are harmless.
+#
+# The distinct trade_date values in this table also double as the *trading
+# calendar* the backtest counts "N 個交易日後" against — it is the market's own
+# calendar, so holidays and typhoon days need no special-casing.
+# ---------------------------------------------------------------------------
+
+
+class DailyPrice(SQLModel, table=True):
+    __tablename__ = "daily_prices"
+
+    # Composite natural primary key rather than a surrogate UUID: this table
+    # grows by ~1,800 rows per trading day (~450k/year), and (trade_date,
+    # symbol) is exactly how the backtest reads it — "these symbols, on these
+    # dates". A UUID column would add bytes and a second index for nothing.
+    trade_date: date = Field(sa_column=Column(Date(), primary_key=True))
+    symbol: str = Field(sa_column=Column(String(16), primary_key=True))
+
+    name: str = Field(default="", nullable=False)
+    market_code: str = Field(default="", nullable=False)  # TWSE / TPEX
+    open: Decimal | None = Field(
+        default=None, sa_column=Column(Numeric(12, 4), nullable=True)
+    )
+    high: Decimal | None = Field(
+        default=None, sa_column=Column(Numeric(12, 4), nullable=True)
+    )
+    low: Decimal | None = Field(
+        default=None, sa_column=Column(Numeric(12, 4), nullable=True)
+    )
+    # The only column the backtest strictly needs; kept NOT NULL so a row can
+    # never claim a trading day happened while offering no price for it.
+    close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
+    volume: int | None = Field(
+        default=None, sa_column=Column(BigInteger(), nullable=True)
+    )
+    created_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )

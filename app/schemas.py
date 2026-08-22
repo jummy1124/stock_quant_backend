@@ -176,3 +176,128 @@ class SnapshotCoverage(BaseModel):
             "support this (e.g. SQLite in tests)."
         ),
     )
+
+
+# ---------- Whole-market daily prices (ingest) ----------
+
+
+class DailyPriceIn(BaseModel):
+    """One symbol's completed daily bar for the payload's trade_date.
+
+    close is optional in the wire format but a bar without one is dropped on the
+    way in: it carries no information the backtest can use, and rejecting the
+    whole upload over a handful of untraded issues would be worse than skipping
+    them.
+    """
+
+    symbol: str
+    name: str = ""
+    market_code: str = ""
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: int | None = None
+
+
+class DailyPricesIngestBody(BaseModel):
+    """One trading day of whole-market closes, POSTed by the screener."""
+
+    trade_date: date
+    source: str = ""  # eod / backfill
+    items: list[DailyPriceIn] = Field(default_factory=list)
+
+
+class DailyPricesIngestResult(BaseModel):
+    trade_date: date
+    received: int
+    inserted: int
+    updated: int
+    skipped: int  # rows dropped for having no close
+
+
+# ---------- Backtest ----------
+
+# The two comparisons the backtest supports. Both exit on a *closing* price;
+# they differ in what counts as the entry.
+#   intraday_to_close: 13:00 盤中價 (the intraday_1300 snapshot) -> 收盤價
+#   close_to_close:    收盤價 (the eod snapshot)                 -> 收盤價
+MODE_INTRADAY_TO_CLOSE = "intraday_to_close"
+MODE_CLOSE_TO_CLOSE = "close_to_close"
+BACKTEST_MODES = (MODE_INTRADAY_TO_CLOSE, MODE_CLOSE_TO_CLOSE)
+
+# The snapshot session each mode draws its entries from.
+MODE_SESSION = {
+    MODE_INTRADAY_TO_CLOSE: "intraday_1300",
+    MODE_CLOSE_TO_CLOSE: "eod",
+}
+
+
+class PriceCoverage(BaseModel):
+    """How much whole-market price history exists — i.e. how far a backtest can
+    actually reach. Shown next to the snapshot coverage so an empty result is
+    self-explanatory ("no prices uploaded yet" vs "no stocks screened").
+    """
+
+    min_date: date | None = None
+    max_date: date | None = None
+    trading_days: int = 0
+    total_rows: int = 0
+    symbols: int = 0
+
+
+class BacktestCoverage(BaseModel):
+    """Everything the backtest page needs to set sensible date bounds."""
+
+    snapshots: SnapshotCoverage
+    prices: PriceCoverage
+
+
+class BacktestHorizonStat(BaseModel):
+    """Aggregate outcome of holding every screened stock for N trading days."""
+
+    n: int
+    samples: int = 0  # entries with both an entry and an exit price
+    missing: int = 0  # entries dropped for a missing price on either end
+    wins: int = 0  # return > 0
+    losses: int = 0  # return < 0
+    flat: int = 0  # return == 0
+    win_rate: float | None = None  # wins / samples, 0..1; None when samples = 0
+    avg_return_pct: float | None = None
+    median_return_pct: float | None = None
+    best_return_pct: float | None = None
+    worst_return_pct: float | None = None
+
+
+class BacktestDetailRow(BaseModel):
+    """One screened stock's realised outcome at the horizon being detailed."""
+
+    trade_date: date
+    symbol: str
+    name: str = ""
+    market: str = ""
+    market_code: str = ""
+    entry_price: float
+    exit_date: date
+    exit_price: float
+    change: float
+    return_pct: float
+
+
+class BacktestResponse(BaseModel):
+    mode: str
+    session: str
+    start: date
+    end: date
+    horizons: list[int]
+    # Entries considered before any price lookup — the denominator behind
+    # "samples + missing" at every horizon.
+    entries: int = 0
+    trading_days: int = 0  # distinct screening days in range
+    summary: list[BacktestHorizonStat] = Field(default_factory=list)
+    detail_n: int = 0
+    detail_total: int = 0  # rows available at detail_n, before the limit
+    detail: list[BacktestDetailRow] = Field(default_factory=list)
+    # Set when the answer is necessarily incomplete, e.g. the price table does
+    # not yet reach far enough past the last screening day to settle horizon N.
+    warning: str | None = None

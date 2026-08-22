@@ -238,6 +238,39 @@ screening snapshots as `.xlsx`, plus an authenticated ingest endpoint the screen
 posts to (guarded by the `X-Ingest-Token` header). See [`DOWNLOAD.md`](DOWNLOAD.md) for the
 full contract.
 
+### Backtest
+
+`/backtestapi` answers one question over the whole snapshot history: **of every stock the
+screener has ever flagged, what fraction was worth more N trading days later?** Two entry
+conventions, matching the two snapshots ingested daily — `intraday_to_close` (entry = the
+13:00 price, exit = a later close, so N = 0 is legal) and `close_to_close` (entry = the
+screening day's close, N ≥ 1). Public, like the snapshot downloads.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/backtestapi/coverage` | How far the backtest can reach: snapshot range **and** price range |
+| GET | `/backtestapi/run` | Win rate, mean/median/best/worst return per N, plus per-stock detail |
+| GET | `/backtestapi/backtest.xlsx` | The same run as a two-sheet workbook |
+
+See [`BACKTEST.md`](BACKTEST.md) for the full contract and the design notes.
+
+Answering it needs a price source the snapshots cannot provide — a stock only appears in a
+snapshot on the days it *passed* the filter, and the exit day is usually not one of those.
+Hence `daily_prices`: an ordinary whole-market daily bar, one row per `(trade_date, symbol)`,
+POSTed to `/userapi/ingest/prices` by the screener after close (it already holds the
+full-market history in memory, so this costs no extra exchange requests) and by that
+project's `run_backfill_prices.py` for history predating the feature.
+
+Two behaviours worth knowing:
+
+- **The trading calendar is the data.** "N 個交易日後" counts distinct `trade_date` values in
+  `daily_prices`, so weekends, holidays and typhoon days need no special-casing — a day
+  nobody traded has no rows and is never counted.
+- **"No trade" and "no data" stay separate.** An entry whose exit price is unknown (the N
+  days have not elapsed yet, or prices were never uploaded for that day) is reported as
+  `missing`, never as a flat or losing trade. Folding those into the denominator would drag
+  every win rate toward 50% precisely where coverage is thinnest.
+
 ## Project structure
 
 ```
@@ -248,15 +281,18 @@ app/
   security.py    password hashing, JWT, email-token hashing, get_current_user
   email.py       pluggable sender (console / SMTP) + message templates
   ratelimit.py   in-process sliding-window limiter for the auth endpoints
-  models.py      SQLModel: User, Record, EmailToken (+ snapshots)
+  models.py      SQLModel: User, Record, EmailToken, snapshots, DailyPrice
   schemas.py     request/response models (snake_case)
   crud.py        DB access (always scoped by user_id)
   download_xlsx.py  openpyxl exporters
+  backtest.py       forward-return engine (trading-day arithmetic, win rates)
+  backtest_xlsx.py  openpyxl exporter for a backtest run
   routers/
     auth.py      /userapi/auth/*, /userapi/me
     records.py   /userapi/records*
     download.py  /downloadapi/*
-    ingest.py    snapshot ingest (X-Ingest-Token)
+    backtest.py  /backtestapi/*
+    ingest.py    snapshot + daily-price ingest (X-Ingest-Token)
 alembic/         migrations
 tests/           pytest suite (in-memory SQLite)
 ```
@@ -271,7 +307,10 @@ poetry run pytest
 Runs against in-memory SQLite (no Postgres required) and covers the auth flow, records
 CRUD, **user isolation**, auth-error handling, both email flows (verification and
 password reset), token expiry / reuse / cross-purpose misuse, anti-enumeration, the
-rate limiter, and the config guard rails.
+rate limiter, the config guard rails, and the backtest — whose arithmetic is checked
+against hand-computed numbers over fixtures that deliberately include a market holiday
+inside the holding period, a stock with no price on its exit day, and a horizon that has
+not elapsed yet.
 
 Mail never leaves the process: the `outbox` fixture swaps in a capturing sender, so the
 tests read the real link out of the real message body.
