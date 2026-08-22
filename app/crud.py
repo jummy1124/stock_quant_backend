@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -6,13 +7,14 @@ from sqlalchemy import delete, func, text
 from sqlmodel import Session, select
 
 from app.models import (
+    DailyPrice,
     EmailToken,
     Record,
     ScreenSnapshot,
     ScreenSnapshotItem,
     User,
 )
-from app.schemas import SnapshotIngestBody, UpsertBody
+from app.schemas import DailyPricesIngestBody, SnapshotIngestBody, UpsertBody
 
 
 def _utcnow() -> datetime:
@@ -392,3 +394,137 @@ def get_snapshot_items(
         .order_by(ScreenSnapshotItem.rank)
     )
     return list(session.exec(stmt).all())
+
+
+def list_snapshot_entries(
+    session: Session, start: date, end: date, session_name: str
+) -> list[tuple[date, ScreenSnapshotItem]]:
+    """Every screened stock in [start, end] for one session, as
+    (trade_date, item) pairs, oldest first.
+
+    A single join rather than "list the snapshots, then fetch each one's items":
+    a multi-year backtest spans hundreds of snapshots, and the per-snapshot
+    version would issue hundreds of round-trips to assemble the same rows.
+    """
+    stmt = (
+        select(ScreenSnapshot.trade_date, ScreenSnapshotItem)
+        .join(ScreenSnapshotItem, ScreenSnapshotItem.snapshot_id == ScreenSnapshot.id)
+        .where(
+            ScreenSnapshot.trade_date >= start,
+            ScreenSnapshot.trade_date <= end,
+            ScreenSnapshot.session == session_name,
+        )
+        .order_by(ScreenSnapshot.trade_date, ScreenSnapshotItem.rank)
+    )
+    return [(row[0], row[1]) for row in session.exec(stmt).all()]
+
+
+# ---------- Daily prices (whole-market closes; the backtest's price source) ----------
+
+
+def upsert_daily_prices(session: Session, body: DailyPricesIngestBody) -> tuple[int, int]:
+    """Insert or overwrite one trading day's bars. Returns (inserted, updated).
+
+    Read-then-write rather than a dialect-specific ON CONFLICT: the payload is
+    one day of one market (~1,800 rows at most), so the extra SELECT is cheap,
+    and the same code path works on Postgres in production and SQLite in tests.
+
+    Deliberately *not* "delete the day, then insert": the backfill CLI and the
+    live screener can each upload a partial day (one market, or only the symbols
+    it could quote), and a delete-first strategy would let the second upload
+    silently destroy the first one's rows.
+    """
+    existing = {
+        row.symbol: row
+        for row in session.exec(
+            select(DailyPrice).where(DailyPrice.trade_date == body.trade_date)
+        ).all()
+    }
+    inserted = updated = 0
+    for item in body.items:
+        if item.close is None:
+            # A bar with no close says nothing the backtest can use, and the
+            # column is NOT NULL. Skip rather than fail the whole upload.
+            continue
+        row = existing.get(item.symbol)
+        if row is None:
+            row = DailyPrice(trade_date=body.trade_date, symbol=item.symbol)
+            session.add(row)
+            inserted += 1
+        else:
+            updated += 1
+        row.name = item.name or (row.name if row.name else "")
+        row.market_code = item.market_code or (row.market_code if row.market_code else "")
+        row.open = _to_decimal(item.open)
+        row.high = _to_decimal(item.high)
+        row.low = _to_decimal(item.low)
+        row.close = _to_decimal(item.close)
+        row.volume = item.volume
+    session.commit()
+    return inserted, updated
+
+
+def list_price_trading_days(session: Session) -> list[date]:
+    """Every trading day the price table knows about, ascending.
+
+    This *is* the trading calendar the backtest counts "N 個交易日後" against.
+    Deriving it from the data rather than from a holiday list means market
+    closures — weekends, national holidays, typhoon days, unscheduled halts —
+    are handled by construction: a day the whole market did not trade simply has
+    no rows, so it is never counted.
+    """
+    stmt = select(DailyPrice.trade_date).distinct().order_by(DailyPrice.trade_date)
+    return list(session.exec(stmt).all())
+
+
+def get_price_coverage(session: Session) -> tuple[date | None, date | None, int, int, int]:
+    """(earliest, latest, trading days, total rows, distinct symbols) for the
+    price table — a cheap SQL aggregate, so it stays accurate at any size.
+    """
+    total = session.exec(select(func.count()).select_from(DailyPrice)).one()
+    if not total:
+        return None, None, 0, 0, 0
+    min_date = session.exec(select(func.min(DailyPrice.trade_date))).one()
+    max_date = session.exec(select(func.max(DailyPrice.trade_date))).one()
+    days = session.exec(
+        select(func.count(func.distinct(DailyPrice.trade_date)))
+    ).one()
+    symbols = session.exec(select(func.count(func.distinct(DailyPrice.symbol)))).one()
+    return min_date, max_date, days, total, symbols
+
+
+# Chunk size for the symbol IN (...) lists below. Postgres tolerates far more,
+# but SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999 — staying under it
+# keeps the test suite running against the same code path as production.
+_SYMBOL_CHUNK = 500
+
+
+def load_close_prices(
+    session: Session, wanted: Mapping[date, Iterable[str]]
+) -> dict[tuple[str, date], float]:
+    """{(symbol, trade_date): close} for exactly the pairs asked for.
+
+    Takes a {trade_date: symbols} map rather than a date range on purpose. The
+    backtest needs a sparse scatter of pairs — each screened stock on its own
+    handful of exit days — and a range query would have to fetch the whole
+    symbols × days rectangle around them to be sure of covering it. On a year of
+    real data that is an order of magnitude more rows read and converted than
+    the caller will ever look at (measured: ~434k fetched to answer ~35k), and
+    the difference is seconds of wall clock on the "全部歷史" query.
+
+    One statement per date (chunked by symbol count) keeps every statement on
+    the (trade_date, symbol) primary key.
+    """
+    out: dict[tuple[str, date], float] = {}
+    for trade_date, symbols in wanted.items():
+        unique = sorted({s for s in symbols if s})
+        for i in range(0, len(unique), _SYMBOL_CHUNK):
+            chunk = unique[i : i + _SYMBOL_CHUNK]
+            stmt = select(DailyPrice.symbol, DailyPrice.close).where(
+                DailyPrice.trade_date == trade_date,
+                DailyPrice.symbol.in_(chunk),  # type: ignore[attr-defined]
+            )
+            for symbol, close in session.exec(stmt).all():
+                if close is not None:
+                    out[(symbol, trade_date)] = float(close)
+    return out
