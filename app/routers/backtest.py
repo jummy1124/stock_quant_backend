@@ -24,6 +24,8 @@ from app.backtest_xlsx import backtest_to_xlsx, empty_backtest_xlsx
 from app.db import get_session
 from app.schemas import (
     BACKTEST_MODES,
+    DEFAULT_DETAIL_SORT,
+    DETAIL_SORT_KEYS,
     MODE_CLOSE_TO_CLOSE,
     BacktestCoverage,
     BacktestResponse,
@@ -98,6 +100,8 @@ def _run(
     horizons_raw: str | None,
     detail_n: int | None,
     detail_limit: int,
+    detail_sort: str = DEFAULT_DETAIL_SORT,
+    detail_order: str = "desc",
 ) -> BacktestResponse:
     mode = _validated_mode(mode)
     start, end = _resolve_range(session, start, end)
@@ -116,6 +120,8 @@ def _run(
             horizons=horizons,
             detail_n=detail_n,
             detail_limit=detail_limit,
+            detail_sort=detail_sort,
+            detail_order=detail_order,
         )
     except ValueError as exc:
         raise _bad_request(str(exc)) from None
@@ -174,10 +180,22 @@ def backtest_run(
     detail_limit: int = Query(
         500, ge=0, le=_MAX_DETAIL_ROWS, description="明細表最多回幾筆"
     ),
+    detail_sort: str = Query(
+        DEFAULT_DETAIL_SORT, description=f"明細排序欄位，需為 {DETAIL_SORT_KEYS} 其中之一"
+    ),
+    detail_order: str = Query("desc", description="asc | desc"),
     session: Session = Depends(get_session),
 ):
-    """Public: win rate and return distribution for every screened stock in range."""
-    return _run(session, mode, start, end, horizons, detail_n, detail_limit)
+    """Public: win rate and return distribution for every screened stock in range.
+
+    Note that detail_sort orders the full result set before detail_limit cuts it,
+    so "the 20 best trades" really is the best of all of them — not the best of
+    whichever page happened to come back.
+    """
+    return _run(
+        session, mode, start, end, horizons, detail_n, detail_limit,
+        detail_sort, detail_order,
+    )
 
 
 @router.get("/backtest.xlsx")
@@ -187,6 +205,8 @@ def backtest_xlsx(
     end: date_cls | None = Query(None),
     horizons: str | None = Query(None),
     detail_n: int | None = Query(None),
+    detail_sort: str = Query(DEFAULT_DETAIL_SORT),
+    detail_order: str = Query("desc"),
     session: Session = Depends(get_session),
 ):
     """Public: the same run as /run, as a workbook.
@@ -194,7 +214,10 @@ def backtest_xlsx(
     The detail sheet is capped higher than the JSON endpoint's default — a file
     being saved for offline analysis wants the rows, where a web table does not.
     """
-    result = _run(session, mode, start, end, horizons, detail_n, _MAX_DETAIL_ROWS)
+    result = _run(
+        session, mode, start, end, horizons, detail_n, _MAX_DETAIL_ROWS,
+        detail_sort, detail_order,
+    )
     filename = (
         f"backtest_{result.start:%Y%m%d}_{result.end:%Y%m%d}"
         f"_{result.mode}_N{result.detail_n}.xlsx"

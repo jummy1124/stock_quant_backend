@@ -269,6 +269,20 @@ class BacktestHorizonStat(BaseModel):
     worst_return_pct: float | None = None
 
 
+# Columns the per-stock detail table can be ordered by. Sorting happens in the
+# engine, *before* the row limit — see BacktestResponse.detail_total.
+DETAIL_SORT_KEYS = (
+    "trade_date",
+    "symbol",
+    "entry_price",
+    "exit_date",
+    "exit_price",
+    "change",
+    "return_pct",
+)
+DEFAULT_DETAIL_SORT = "trade_date"
+
+
 class BacktestDetailRow(BaseModel):
     """One screened stock's realised outcome at the horizon being detailed."""
 
@@ -297,6 +311,10 @@ class BacktestResponse(BaseModel):
     summary: list[BacktestHorizonStat] = Field(default_factory=list)
     detail_n: int = 0
     detail_total: int = 0  # rows available at detail_n, before the limit
+    # Echoed back so the client can render the sort indicator from the response
+    # it actually got, rather than from what it hoped it had asked for.
+    detail_sort: str = DEFAULT_DETAIL_SORT
+    detail_order: str = "desc"
     detail: list[BacktestDetailRow] = Field(default_factory=list)
     # Set when the answer is necessarily incomplete, e.g. the price table does
     # not yet reach far enough past the last screening day to settle horizon N.

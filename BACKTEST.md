@@ -90,13 +90,28 @@ stock_quant_backend
 | 端點 | 參數 |
 |---|---|
 | `GET /backtestapi/coverage` | 無 |
-| `GET /backtestapi/run` | `mode`、`start`、`end`（省略 = 全部歷史）、`horizons`（逗號分隔，如 `1,2,3,5,10`）、`detail_n`、`detail_limit` |
+| `GET /backtestapi/run` | `mode`、`start`、`end`（省略 = 全部歷史）、`horizons`（逗號分隔，如 `1,2,3,5,10`）、`detail_n`、`detail_limit`、`detail_sort`、`detail_order` |
 | `GET /backtestapi/backtest.xlsx` | 同上（明細上限放寬到 5000 列） |
 
 與快照下載一樣是**公開**的：篩選結果與全市場收盤價都是系統層級的參考資料，不屬於
 任何一個使用者。
 
 護欄：單一 N 上限 120、一次最多 16 個 N、查詢區間上限 5 年、明細上限 5000 列。
+
+### 明細排序：先排序、後截斷
+
+`detail_sort` / `detail_order` 是在**整份結果**上排完序才套用 `detail_limit`，順序不能倒過來。
+
+明細一次最多回 500 列，而 `detail_total` 動輒好幾千。如果先截成「最新 500 列」再讓
+瀏覽器排那 500 列，「報酬率最高的那筆」給出的其實是「最新 500 筆裡最高的那筆」——
+而且它和真正的答案長得一模一樣，沒有任何跡象能讓人發現拿到的是錯的。這種會靜靜
+騙人的東西不能留，所以排序放在後端；前端點表頭是重新查詢一次，不是排手上那批。
+
+前端也把這件事寫在標題上：截斷時顯示「依目前排序取前 N 筆，全部共 M 筆」，而不是
+含混的「顯示 N / 共 M」。
+
+可排序的欄位見 `schemas.DETAIL_SORT_KEYS`。每一欄都以 `(篩選日, 代號)` 收尾當
+tie-break，所以數值相同的兩筆不會在每次請求之間互換位置、讓表格看起來不穩定。
 
 ## 效能
 

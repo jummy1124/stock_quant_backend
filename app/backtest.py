@@ -43,6 +43,8 @@ from sqlmodel import Session
 
 from app import crud
 from app.schemas import (
+    DEFAULT_DETAIL_SORT,
+    DETAIL_SORT_KEYS,
     MODE_CLOSE_TO_CLOSE,
     MODE_SESSION,
     BacktestDetailRow,
@@ -167,8 +169,14 @@ def run_backtest(
     horizons: list[int],
     detail_n: int | None = None,
     detail_limit: int = 500,
+    detail_sort: str = DEFAULT_DETAIL_SORT,
+    detail_order: str = "desc",
 ) -> BacktestResponse:
     """Run the whole-database backtest and return the response payload."""
+    if detail_sort not in DETAIL_SORT_KEYS:
+        raise ValueError(f"排序欄位需為 {DETAIL_SORT_KEYS} 其中之一。")
+    if detail_order not in ("asc", "desc"):
+        raise ValueError("排序方向需為 asc 或 desc。")
     session_name = MODE_SESSION[mode]
     horizons = normalize_horizons(horizons)
     if detail_n is None or detail_n not in horizons:
@@ -188,6 +196,8 @@ def run_backtest(
         trading_days=screening_days,
         summary=[BacktestHorizonStat(n=n, missing=len(entries)) for n in horizons],
         detail_n=detail_n,
+        detail_sort=detail_sort,
+        detail_order=detail_order,
     )
     if not entries:
         empty.warning = "此區間與時段查無篩選紀錄。"
@@ -267,8 +277,12 @@ def run_backtest(
                     )
                 )
 
-    # Newest first: the most recent screening days are what a reader checks.
-    detail.sort(key=lambda r: (r.trade_date, r.symbol), reverse=True)
+    # Sort the WHOLE result set, then cut. Doing it the other way round — cut to
+    # the newest 500 and let the browser sort those — would answer "which trade
+    # returned the most?" with the best of the most recent 500, and look no
+    # different from the real answer. detail_total tells the client how much was
+    # left behind.
+    detail.sort(key=_detail_sort_key(detail_sort), reverse=(detail_order == "desc"))
     detail_total = len(detail)
     if detail_limit >= 0:
         detail = detail[:detail_limit]
@@ -286,9 +300,27 @@ def run_backtest(
         summary=[_summarize(n, returns[n], missing[n]) for n in horizons],
         detail_n=detail_n,
         detail_total=detail_total,
+        detail_sort=detail_sort,
+        detail_order=detail_order,
         detail=detail,
         warning=warning,
     )
+
+
+def _detail_sort_key(key: str):
+    """Sort key for one detail column, with a stable tie-break.
+
+    Every column falls back to (trade_date, symbol) so equal values — two stocks
+    that both returned exactly 0%, say — keep a fixed, reproducible order rather
+    than shuffling between requests and making the table look unstable.
+    """
+    if key == "trade_date":
+        return lambda r: (r.trade_date, r.symbol)
+    if key == "symbol":
+        return lambda r: (r.symbol, r.trade_date)
+    if key == "exit_date":
+        return lambda r: (r.exit_date, r.trade_date, r.symbol)
+    return lambda r: (getattr(r, key), r.trade_date, r.symbol)
 
 
 def _coverage_warning(

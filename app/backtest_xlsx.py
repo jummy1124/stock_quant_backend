@@ -45,6 +45,11 @@ _SUMMARY_WIDTHS = [11, 9, 8, 8, 8, 9, 11, 12, 14, 10, 10]
 _DETAIL_HEADERS = [
     "篩選日", "代號", "名稱", "市場", "進場價", "出場日", "出場價", "漲跌", "報酬%",
 ]
+_SORT_LABEL = {
+    "trade_date": "篩選日", "symbol": "代號", "entry_price": "進場價",
+    "exit_date": "出場日", "exit_price": "出場價", "change": "漲跌",
+    "return_pct": "報酬%",
+}
 _DETAIL_WIDTHS = [12, 9, 13, 7, 10, 12, 10, 9, 10]
 
 
@@ -90,9 +95,12 @@ def backtest_to_xlsx(result: BacktestResponse) -> bytes:
     ws.append(["⚠️ 統計為歷史資訊參考，非投資建議。"])
 
     det = wb.create_sheet(f"明細 N={result.detail_n}")
+    order_label = "由大到小" if result.detail_order == "desc" else "由小到大"
+    sort_label = _SORT_LABEL.get(result.detail_sort, result.detail_sort)
     det.append([
         f"N = {result.detail_n} 個交易日後的個股表現"
-        f"（共 {result.detail_total} 筆，本表列出 {len(result.detail)} 筆）"
+        f"（共 {result.detail_total} 筆，本表列出 {len(result.detail)} 筆；"
+        f"依「{sort_label}」{order_label}排序）"
     ])
     det.cell(row=1, column=1).font = Font(bold=True, size=12)
     det.merge_cells(
