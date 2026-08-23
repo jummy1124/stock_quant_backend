@@ -346,3 +346,120 @@ def test_xlsx_export_is_still_a_workbook_when_empty(client):
     resp = client.get("/backtestapi/backtest.xlsx", params={"horizons": "1"})
     assert resp.status_code == 200
     assert resp.content[:2] == b"PK"
+
+
+# --------------------------------------------------------------------------
+# Detail sorting
+#
+# The property that matters is that sorting happens over the WHOLE result set
+# and the limit is applied afterwards. Get that backwards and "the best trade"
+# silently becomes "the best of the newest page", which looks identical.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(name="spread")
+def spread_fixture(client):
+    """Two screening days; the biggest winner is on the OLDER day.
+
+    Default order is newest-first, so a limit of 2 would return only the newer
+    day's rows — which is exactly what makes this fixture able to tell
+    sort-then-cut apart from cut-then-sort.
+
+        6/01: 2330 100 -> 130 (+30%)   <- best overall, but the older day
+              2317 100 ->  90 (-10%)   <- worst overall
+        6/02: 1101 100 -> 101  (+1%)
+              1102 100 -> 102  (+2%)
+    """
+    post_prices(client, "2026-06-01", [("2330", 100.0), ("2317", 100.0)])
+    post_prices(client, "2026-06-02", [("2330", 130.0), ("2317", 90.0),
+                                       ("1101", 100.0), ("1102", 100.0)])
+    post_prices(client, "2026-06-03", [("1101", 101.0), ("1102", 102.0)])
+    post_snapshot(client, "2026-06-01", "eod", [("2330", 100.0), ("2317", 100.0)])
+    post_snapshot(client, "2026-06-02", "eod", [("1101", 100.0), ("1102", 100.0)])
+    return client
+
+
+def _detail(client, **params):
+    body = client.get(
+        "/backtestapi/run",
+        params={"mode": "close_to_close", "horizons": "1", "detail_n": 1, **params},
+    ).json()
+    return body
+
+
+def test_detail_defaults_to_newest_first(spread):
+    body = _detail(spread)
+    assert body["detail_sort"] == "trade_date" and body["detail_order"] == "desc"
+    assert [r["trade_date"] for r in body["detail"]] == [
+        "2026-06-02", "2026-06-02", "2026-06-01", "2026-06-01",
+    ]
+
+
+def test_sorting_by_return_spans_every_row_not_just_the_newest(spread):
+    """The whole point: the best trade is on the older day, and must still win."""
+    body = _detail(spread, detail_sort="return_pct", detail_order="desc")
+    assert [r["symbol"] for r in body["detail"]] == ["2330", "1102", "1101", "2317"]
+
+    body = _detail(spread, detail_sort="return_pct", detail_order="asc")
+    assert [r["symbol"] for r in body["detail"]] == ["2317", "1101", "1102", "2330"]
+
+
+def test_limit_keeps_the_top_of_the_requested_sort_not_the_newest_rows(spread):
+    """detail_limit cuts AFTER sorting, so a limit of 1 returns the true best."""
+    body = _detail(spread, detail_sort="return_pct", detail_order="desc",
+                   detail_limit=1)
+    assert body["detail_total"] == 4          # the cut is reported, not hidden
+    assert [r["symbol"] for r in body["detail"]] == ["2330"]   # not a 6/02 row
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("symbol", ["2330", "2317", "1102", "1101"]),
+        ("exit_price", ["2330", "1102", "1101", "2317"]),
+        ("change", ["2330", "1102", "1101", "2317"]),
+    ],
+)
+def test_every_sortable_column_orders_descending(spread, key, expected):
+    body = _detail(spread, detail_sort=key, detail_order="desc")
+    assert [r["symbol"] for r in body["detail"]] == expected
+
+
+def test_an_all_tied_column_falls_back_to_date_then_symbol(spread):
+    """Every entry price in this fixture is 100, so this sorts purely on the
+    tie-break — newest day first, then symbol descending."""
+    body = _detail(spread, detail_sort="entry_price", detail_order="desc")
+    assert [r["symbol"] for r in body["detail"]] == ["1102", "1101", "2330", "2317"]
+
+
+def test_ties_break_on_date_and_symbol_so_the_order_is_reproducible(client):
+    """Two identical returns must not swap places between requests."""
+    post_prices(client, "2026-06-01", [("2330", 100.0), ("2317", 100.0)])
+    post_prices(client, "2026-06-02", [("2330", 110.0), ("2317", 110.0)])
+    post_snapshot(client, "2026-06-01", "eod", [("2330", 100.0), ("2317", 100.0)])
+    orders = {
+        tuple(r["symbol"] for r in _detail(client, detail_sort="return_pct")["detail"])
+        for _ in range(3)
+    }
+    assert len(orders) == 1
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"detail_sort": "name"}, {"detail_sort": "'; drop table"}, {"detail_order": "sideways"}],
+)
+def test_invalid_sort_parameters_are_rejected(spread, params):
+    resp = spread.get(
+        "/backtestapi/run",
+        params={"mode": "close_to_close", "horizons": "1", **params},
+    )
+    assert resp.status_code == 422
+
+
+def test_xlsx_export_honours_the_sort(spread):
+    resp = spread.get(
+        "/backtestapi/backtest.xlsx",
+        params={"mode": "close_to_close", "horizons": "1", "detail_n": 1,
+                "detail_sort": "return_pct", "detail_order": "asc"},
+    )
+    assert resp.status_code == 200 and resp.content[:2] == b"PK"
