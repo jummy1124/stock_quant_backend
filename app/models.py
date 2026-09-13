@@ -309,6 +309,23 @@ class ScreenSnapshotItem(SQLModel, table=True):
 # ---------------------------------------------------------------------------
 
 
+class BranchTrade(SQLModel, table=True):
+    __tablename__ = "branch_trades"
+    __table_args__ = (UniqueConstraint("trade_date", "branch_code", "symbol", name="uq_branch_trade"),)
+
+    trade_date: date = Field(sa_column=Column(Date(), primary_key=True))
+    branch_code: str = Field(sa_column=Column(String(16), primary_key=True))
+    symbol: str = Field(sa_column=Column(String(16), primary_key=True))
+    branch_name: str = Field(default="", nullable=False)
+    stock_name: str = Field(default="", nullable=False)
+    buy_amount: int = Field(default=0, sa_column=Column(BigInteger(), nullable=False))
+    sell_amount: int = Field(default=0, sa_column=Column(BigInteger(), nullable=False))
+    net_amount: int = Field(default=0, sa_column=Column(BigInteger(), nullable=False))
+    inventory_cost: int | None = Field(default=None, sa_column=Column(BigInteger(), nullable=True))
+    inventory_value: int | None = Field(default=None, sa_column=Column(BigInteger(), nullable=True))
+    fetched_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
 class DailyPrice(SQLModel, table=True):
     __tablename__ = "daily_prices"
 

@@ -216,6 +216,40 @@ class DailyPricesIngestResult(BaseModel):
     skipped: int  # rows dropped for having no close
 
 
+# ---------- Branch trading ----------
+
+class BranchTradeIn(BaseModel):
+    trade_date: date
+    branch_code: str
+    branch_name: str = ""
+    symbol: str
+    stock_name: str = ""
+    buy_amount: int = 0
+    sell_amount: int = 0
+    net_amount: int = 0
+    inventory_cost: int | None = None
+    inventory_value: int | None = None
+
+
+class BranchTradesIngestBody(BaseModel):
+    trade_date: date
+    branch_code: str
+    branch_name: str = ""
+    items: list[BranchTradeIn] = Field(default_factory=list)
+
+
+class BranchTradeOut(BranchTradeIn):
+    fetched_at: datetime
+
+
+class BranchTradesResponse(BaseModel):
+    branch_code: str
+    branch_name: str
+    start: date
+    end: date
+    trades: list[BranchTradeOut]
+
+
 # ---------- Backtest ----------
 
 # The two comparisons the backtest supports. Both exit on a *closing* price;
