@@ -7,6 +7,7 @@ from sqlalchemy import delete, func, text
 from sqlmodel import Session, select
 
 from app.models import (
+    BranchTrade,
     DailyPrice,
     EmailToken,
     Record,
@@ -14,7 +15,7 @@ from app.models import (
     ScreenSnapshotItem,
     User,
 )
-from app.schemas import DailyPricesIngestBody, SnapshotIngestBody, UpsertBody
+from app.schemas import BranchTradesIngestBody, DailyPricesIngestBody, SnapshotIngestBody, UpsertBody
 
 
 def _utcnow() -> datetime:
@@ -417,6 +418,32 @@ def list_snapshot_entries(
         .order_by(ScreenSnapshot.trade_date, ScreenSnapshotItem.rank)
     )
     return [(row[0], row[1]) for row in session.exec(stmt).all()]
+
+
+# ---------- Branch trades ----------
+
+def upsert_branch_trades(session: Session, body: BranchTradesIngestBody) -> int:
+    existing = {r.symbol: r for r in session.exec(select(BranchTrade).where(
+        BranchTrade.trade_date == body.trade_date, BranchTrade.branch_code == body.branch_code)).all()}
+    for item in body.items:
+        row = existing.get(item.symbol)
+        if row is None:
+            row = BranchTrade(trade_date=body.trade_date, branch_code=body.branch_code, symbol=item.symbol)
+            session.add(row)
+        row.branch_name = body.branch_name or item.branch_name
+        row.stock_name = item.stock_name
+        row.buy_amount = item.buy_amount; row.sell_amount = item.sell_amount; row.net_amount = item.net_amount
+        row.inventory_cost = item.inventory_cost; row.inventory_value = item.inventory_value
+        row.fetched_at = _utcnow()
+    session.commit()
+    return len(body.items)
+
+
+def list_branch_trades(session: Session, branch_code: str, start: date, end: date) -> list[BranchTrade]:
+    return list(session.exec(select(BranchTrade).where(
+        BranchTrade.branch_code == branch_code,
+        BranchTrade.trade_date >= start, BranchTrade.trade_date <= end,
+    ).order_by(BranchTrade.trade_date, BranchTrade.net_amount.desc())).all())
 
 
 # ---------- Daily prices (whole-market closes; the backtest's price source) ----------
